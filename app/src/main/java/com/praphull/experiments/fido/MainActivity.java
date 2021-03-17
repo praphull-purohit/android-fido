@@ -8,12 +8,15 @@ import android.view.View;
 import android.widget.EditText;
 import android.widget.TextView;
 
+import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 
 import com.google.android.gms.common.util.Strings;
 import com.google.android.gms.fido.Fido;
 import com.google.android.gms.fido.fido2.Fido2ApiClient;
 import com.google.android.gms.fido.fido2.api.common.PublicKeyCredentialCreationOptions;
+import com.google.android.gms.fido.fido2.api.common.PublicKeyCredentialRequestOptions;
+import com.google.android.gms.tasks.OnCompleteListener;
 import com.google.android.gms.tasks.Task;
 import com.google.android.gms.tasks.Tasks;
 
@@ -23,6 +26,7 @@ import java.util.concurrent.Executors;
 public class MainActivity extends AppCompatActivity {
     private final static String TAG = "MainActivity";
     private static final int REGISTER_REQUEST_CODE = 0;
+    private static final int SIGN_REQUEST_CODE = 1;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -37,7 +41,7 @@ public class MainActivity extends AppCompatActivity {
         if (t == null) {
             Log.d(TAG, message);
         } else {
-            Log.d(TAG, message, t);
+            Log.w(TAG, message, t);
         }
     }
 
@@ -67,7 +71,7 @@ public class MainActivity extends AppCompatActivity {
             registrationOptionsTask.addOnCompleteListener(task -> {
                 PublicKeyCredentialCreationOptions options = task.getResult();
                 if (options == null) {
-                    Log.d(TAG, "Received null PublicKeyCredentialCreationOptions, exiting");
+                    Log.w(TAG, "Received null PublicKeyCredentialCreationOptions, exiting!");
                     return;
                 }
                 doRegistration(options);
@@ -98,5 +102,56 @@ public class MainActivity extends AppCompatActivity {
             }
         });
         result.addOnFailureListener(e -> show("Failed to register: " + e.getMessage(), e));
+    }
+
+    private Task<PublicKeyCredentialRequestOptions> asyncGetSignRequest() {
+        return Tasks.call(
+                Executors.newSingleThreadExecutor(),
+                new Callable<PublicKeyCredentialRequestOptions>() {
+                    @Override
+                    public PublicKeyCredentialRequestOptions call() {
+                        //TODO Make call to server to get options
+                        return null;
+                    }
+                });
+    }
+
+    public void login(View v) {
+        Task<PublicKeyCredentialRequestOptions> getSignRequestTask = asyncGetSignRequest();
+        getSignRequestTask.addOnCompleteListener(
+                new OnCompleteListener<PublicKeyCredentialRequestOptions>() {
+                    @Override
+                    public void onComplete(@NonNull Task<PublicKeyCredentialRequestOptions> task) {
+                        PublicKeyCredentialRequestOptions options = task.getResult();
+                        if (options == null) {
+                            Log.w(TAG, "Received null PublicKeyCredentialRequestOptions, exiting");
+                            return;
+                        }
+                        doLogin(options);
+                    }
+                });
+    }
+
+    private void doLogin(PublicKeyCredentialRequestOptions options) {
+        Fido2ApiClient fido2ApiClient = Fido.getFido2ApiClient(this.getApplicationContext());
+
+        Task<PendingIntent> result = fido2ApiClient.getSignPendingIntent(options);
+
+        result.addOnSuccessListener(pendingIntent -> {
+            if (pendingIntent != null) {
+                try {
+                    startIntentSenderForResult(
+                            pendingIntent.getIntentSender(),
+                            SIGN_REQUEST_CODE,
+                            null,
+                            0,
+                            0,
+                            0);
+                } catch (IntentSender.SendIntentException e) {
+                    show("Failed to login: " + e.getMessage(), e);
+                }
+            }
+        });
+        result.addOnFailureListener(e -> show("Failed to login: " + e.getMessage(), e));
     }
 }
