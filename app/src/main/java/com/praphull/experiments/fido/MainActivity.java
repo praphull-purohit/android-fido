@@ -24,15 +24,22 @@ import com.google.android.gms.fido.fido2.api.common.PublicKeyCredentialRequestOp
 import com.google.android.gms.tasks.OnCompleteListener;
 import com.google.android.gms.tasks.Task;
 import com.google.android.gms.tasks.Tasks;
-import com.google.common.io.BaseEncoding;
 
 import java.util.concurrent.Callable;
-import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingDeque;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 public class MainActivity extends AppCompatActivity {
     private final static String TAG = "MainActivity";
     private static final int REGISTER_REQUEST_CODE = 0;
     private static final int LOGIN_REQUEST_CODE = 1;
+
+    // Create a new ThreadPoolExecutor with 2 threads for each processor on the
+    // device and a 60 second keep-alive time.
+    private static final int NUM_CORES = Runtime.getRuntime().availableProcessors();
+    private static final ThreadPoolExecutor THREAD_POOL_EXECUTOR = new ThreadPoolExecutor(
+            NUM_CORES * 2, NUM_CORES * 2, 60L, TimeUnit.SECONDS, new LinkedBlockingDeque<Runnable>());
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -57,7 +64,7 @@ public class MainActivity extends AppCompatActivity {
 
     private Task<PublicKeyCredentialCreationOptions> getRegistrationOptions() {
         return Tasks.call(
-                Executors.newSingleThreadExecutor(),
+                THREAD_POOL_EXECUTOR,
                 new Callable<PublicKeyCredentialCreationOptions>() {
                     @Override
                     public PublicKeyCredentialCreationOptions call() throws Exception {
@@ -112,7 +119,7 @@ public class MainActivity extends AppCompatActivity {
 
     private Task<PublicKeyCredentialRequestOptions> asyncGetSignRequest() {
         return Tasks.call(
-                Executors.newSingleThreadExecutor(),
+                THREAD_POOL_EXECUTOR,
                 new Callable<PublicKeyCredentialRequestOptions>() {
                     @Override
                     public PublicKeyCredentialRequestOptions call() {
