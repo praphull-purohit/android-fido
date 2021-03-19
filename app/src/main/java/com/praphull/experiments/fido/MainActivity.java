@@ -7,10 +7,8 @@ import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
 import android.widget.EditText;
-import android.widget.TextView;
 import android.widget.Toast;
 
-import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 
 import com.google.android.gms.common.util.Strings;
@@ -21,14 +19,19 @@ import com.google.android.gms.fido.fido2.api.common.AuthenticatorAttestationResp
 import com.google.android.gms.fido.fido2.api.common.AuthenticatorErrorResponse;
 import com.google.android.gms.fido.fido2.api.common.PublicKeyCredentialCreationOptions;
 import com.google.android.gms.fido.fido2.api.common.PublicKeyCredentialRequestOptions;
-import com.google.android.gms.tasks.OnCompleteListener;
 import com.google.android.gms.tasks.Task;
-import com.google.android.gms.tasks.Tasks;
+import com.praphull.experiments.fido.client.Base64ExtKt;
+import com.praphull.experiments.fido.client.FidoHttpClient;
+import com.praphull.experiments.fido.client.model.Credential;
 
-import java.util.concurrent.Callable;
+import java.io.IOException;
+import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.LinkedBlockingDeque;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+
+import okhttp3.Response;
 
 public class MainActivity extends AppCompatActivity {
     private final static String TAG = "MainActivity";
@@ -41,6 +44,8 @@ public class MainActivity extends AppCompatActivity {
     private static final ThreadPoolExecutor THREAD_POOL_EXECUTOR = new ThreadPoolExecutor(
             NUM_CORES * 2, NUM_CORES * 2, 60L, TimeUnit.SECONDS, new LinkedBlockingDeque<Runnable>());
 
+    private static final FidoHttpClient httpClient = new FidoHttpClient();
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -49,8 +54,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void show(String message, Throwable t) {
-        TextView tv = findViewById(R.id.resultMessage);
-        tv.setText(message);
+        Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG).show();
         if (t == null) {
             Log.d(TAG, message);
         } else {
@@ -62,31 +66,32 @@ public class MainActivity extends AppCompatActivity {
         show(message, null);
     }
 
-    private Task<PublicKeyCredentialCreationOptions> getRegistrationOptions() {
-        return Tasks.call(
-                THREAD_POOL_EXECUTOR,
-                new Callable<PublicKeyCredentialCreationOptions>() {
-                    @Override
-                    public PublicKeyCredentialCreationOptions call() throws Exception {
-                        //TODO Make call to server to get options
-                        return null;
-                    }
-                });
-    }
-
     public void initiateRegistration(View v) {
         EditText phoneNumberInput = findViewById(R.id.phoneNumberInput);
         if (Strings.isEmptyOrWhitespace(phoneNumberInput.getText().toString())) {
             show("Enter phone number!");
         } else {
-
-            Task<PublicKeyCredentialCreationOptions> registrationOptionsTask = getRegistrationOptions();
+            //TODO: Remove hardcoding of user id
+            Task<Response> registrationOptionsTask = httpClient.getRegistrationOptions(1L, THREAD_POOL_EXECUTOR);
             registrationOptionsTask.addOnCompleteListener(task -> {
-                PublicKeyCredentialCreationOptions options = task.getResult();
-                if (options == null) {
-                    Log.w(TAG, "Received null PublicKeyCredentialCreationOptions, exiting!");
+                Response response = task.getResult();
+                if (response == null) {
+                    Log.w(TAG, "Received null response for , exiting!");
                     return;
                 }
+
+                if (!response.isSuccessful() || response.body() == null) {
+                    Log.w(TAG, "Received invalid response for PublicKeyCredentialCreationOptions, exiting!");
+                    try {
+                        Log.d(TAG, "Response (status " + response.code() + "): " + response.body().string());
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+                    return;
+                }
+                PublicKeyCredentialCreationOptions options =
+                        httpClient.parsePublicKeyCredentialCreationOptions(Objects.requireNonNull(response.body()));
+
                 doRegistration(options);
             });
         }
@@ -95,12 +100,15 @@ public class MainActivity extends AppCompatActivity {
     private void doRegistration(PublicKeyCredentialCreationOptions options) {
         Fido2ApiClient fido2ApiClient = Fido.getFido2ApiClient(this.getApplicationContext());
 
+        Log.d(TAG, "doRegistration: Inside");
         Task<PendingIntent> result = fido2ApiClient.getRegisterPendingIntent(options);
 
         result.addOnSuccessListener(pendingIntent -> {
+            Log.d(TAG, "doRegistration: onSuccess");
             if (pendingIntent != null) {
                 // Start a FIDO2 registration request.
                 try {
+                    Log.d(TAG, "doRegistration: Starting intent");
                     startIntentSenderForResult(
                             pendingIntent.getIntentSender(),
                             REGISTER_REQUEST_CODE,
@@ -117,32 +125,18 @@ public class MainActivity extends AppCompatActivity {
         result.addOnFailureListener(e -> show("Failed to register: " + e.getMessage(), e));
     }
 
-    private Task<PublicKeyCredentialRequestOptions> asyncGetSignRequest() {
-        return Tasks.call(
-                THREAD_POOL_EXECUTOR,
-                new Callable<PublicKeyCredentialRequestOptions>() {
-                    @Override
-                    public PublicKeyCredentialRequestOptions call() {
-                        //TODO Make call to server to get options
-                        return null;
-                    }
-                });
-    }
-
     public void login(View v) {
-        Task<PublicKeyCredentialRequestOptions> getSignRequestTask = asyncGetSignRequest();
-        getSignRequestTask.addOnCompleteListener(
-                new OnCompleteListener<PublicKeyCredentialRequestOptions>() {
-                    @Override
-                    public void onComplete(@NonNull Task<PublicKeyCredentialRequestOptions> task) {
-                        PublicKeyCredentialRequestOptions options = task.getResult();
-                        if (options == null) {
-                            Log.w(TAG, "Received null PublicKeyCredentialRequestOptions, exiting");
-                            return;
-                        }
-                        doLogin(options);
-                    }
-                });
+        //TODO: Remove hardcoding of user id
+        Task<PublicKeyCredentialRequestOptions> getSignRequestTask =
+                httpClient.loginRequest(1L, null, THREAD_POOL_EXECUTOR);
+        getSignRequestTask.addOnCompleteListener(task -> {
+            PublicKeyCredentialRequestOptions options = task.getResult();
+            if (options == null) {
+                Log.w(TAG, "Received null PublicKeyCredentialRequestOptions, exiting");
+                return;
+            }
+            doLogin(options);
+        });
     }
 
     private void doLogin(PublicKeyCredentialRequestOptions options) {
@@ -191,20 +185,30 @@ public class MainActivity extends AppCompatActivity {
                 updateLoginResponseToServer(response);
             }
         } else {
-            show("Operation failed!");
-            Toast.makeText(
-                    MainActivity.this,
-                    "Operation failed, with resultCode " + resultCode,
-                    Toast.LENGTH_SHORT)
-                    .show();
+            show("Operation failed, with resultCode " + resultCode);
         }
     }
 
     private void updateRegisterResponseToServer(AuthenticatorAttestationResponse response) {
-        //TODO
+        Log.d(TAG, "updateRegisterResponseToServer response: " + response);
+        Log.d(TAG, "updateRegisterResponseToServer: att: " + Base64ExtKt.toBase64(response.getAttestationObject()));
+        //TODO: Remove hardcoding of user id
+        Task<List<Credential>> result =
+                httpClient.registerResponse(1L, response, THREAD_POOL_EXECUTOR);
+        if (result == null) {
+            Log.w(TAG, "Received null task in updateRegisterResponseToServer, exiting");
+            return;
+        }
+
+        result.addOnCompleteListener(task -> {
+            List<Credential> credentials = task.getResult();
+            Log.d(TAG, "updateRegisterResponseToServer succeeded with result: " + credentials);
+        });
+        result.addOnFailureListener(e -> show("Failed to update registration response on server: " + e.getMessage(), e));
     }
 
     private void updateLoginResponseToServer(AuthenticatorAssertionResponse response) {
+        Log.d(TAG, "updateLoginResponseToServer response: " + response);
         //TODO
     }
 }

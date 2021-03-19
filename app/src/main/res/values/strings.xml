@@ -1,7 +1,17 @@
 <resources>
+<string name="asset_statements" translatable="false">
+[{
+\"include\": \"https://fido2.apps.praphull.com/.well-known/assetlinks.json\"
+}]
+</string>
+
     <string name="app_name">Fido</string>
-    <string name="register">Register</string>
-    <string name="login">Login</string>
+    <string name="register_fido">Password-less Registration</string>
+    <string name="login_fido">Password-less Login</string>
     <string name="phone_number">Phone number</string>
     <string name="enter_phone_number">Enter phone number</string>
+    <string name="standard_login">Login</string>
+    <string name="enter_password">Enter password</string>
+    <string name="logout">Logout</string>
+    <string name="or">Or</string>
 </resources>
