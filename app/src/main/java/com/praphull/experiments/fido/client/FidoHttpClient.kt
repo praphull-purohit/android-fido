@@ -8,6 +8,7 @@ import com.google.android.gms.fido.fido2.api.common.*
 import com.google.android.gms.tasks.Task
 import com.google.android.gms.tasks.Tasks
 import com.praphull.experiments.fido.client.model.Credential
+import com.praphull.experiments.fido.client.model.UserLoginResponse
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -17,18 +18,26 @@ import java.io.StringWriter
 import java.util.concurrent.Executor
 import java.util.concurrent.TimeUnit
 
+//Reference: https://github.com/googlecodelabs/fido2-codelab
 class FidoHttpClient {
 
     companion object {
-        private const val BaseUrl = "https://fido2.apps.praphull.com/auth/fido2"
-        private const val RegistrationChallengeUrl = "$BaseUrl/attestation/options?platform_only=true"
-        private const val RegistrationUrl = "$BaseUrl/register"
-        private const val LoginChallengeUrl = "$BaseUrl/assertion/options"
-        private const val LoginUrl = "$BaseUrl/login"
+        private const val BaseUrl = "https://fido2.apps.praphull.com"
+
+        private const val NormalLoginUrl = "$BaseUrl/users/doLogin"
+
+        private const val FidoUrl = "$BaseUrl/auth/fido2"
+        private const val RegistrationChallengeUrl = "$FidoUrl/attestation/options?platform_only=true"
+        private const val RegistrationUrl = "$FidoUrl/register"
+        private const val LoginChallengeUrl = "$FidoUrl/assertion/options"
+        private const val LoginUrl = "$FidoUrl/login"
+        private const val FetchUserIdUrl = "$FidoUrl/user/id"
+
         private val JSON = "application/json".toMediaTypeOrNull()
         private const val TAG = "AuthApi"
         private const val HeaderUserTokenKey = "X-USER-TOKEN"
         private const val HeaderUserIdKey = "X-USER-ID"
+        private const val HeaderUserNameKey = "X-USER-NAME"
     }
 
 
@@ -38,6 +47,50 @@ class FidoHttpClient {
             .writeTimeout(40, TimeUnit.SECONDS)
             .connectTimeout(40, TimeUnit.SECONDS)
             .build()
+
+    fun normalLogin(username: String, password: String, executor: Executor): Task<UserLoginResponse> {
+        val call = client.newCall(
+                Request.Builder()
+                        .url(NormalLoginUrl)
+                        .method("POST", jsonRequestBody {
+                            name("username").value(username)
+                            name("password").value(password)
+                        })
+                        .build()
+        )
+        return Tasks.call(executor, {
+            val apiResponse = call.execute()
+            if (!apiResponse.isSuccessful) {
+                throwResponseError(apiResponse, "Error calling normalLogin")
+            }
+            if (apiResponse.code == 200 && apiResponse.body != null) {
+                parseUserLoginResult(apiResponse.body!!)
+            } else {
+                UserLoginResponse(null, null, "Login failed")
+            }
+        })
+    }
+
+    fun fetchUserId(username: String, executor: Executor): Task<UserLoginResponse> {
+        val call = client.newCall(
+                Request.Builder()
+                        .url(FetchUserIdUrl)
+                        .addHeader(HeaderUserNameKey, username)
+                        .get()
+                        .build()
+        )
+        return Tasks.call(executor, {
+            val apiResponse = call.execute()
+            if (!apiResponse.isSuccessful) {
+                throwResponseError(apiResponse, "Error calling fetchUserId")
+            }
+            if (apiResponse.code == 200 && apiResponse.body != null) {
+                parseUserLoginResult(apiResponse.body!!)
+            } else {
+                UserLoginResponse(null, null, "Fetch UserId failed")
+            }
+        })
+    }
 
     fun getRegistrationOptions(userId: Long, executor: Executor): Task<Response> {
         val call = client.newCall(
@@ -121,6 +174,44 @@ class FidoHttpClient {
         })
     }
 
+    fun updateLoginResponse(response: AuthenticatorAssertionResponse,
+                            executor: Executor): Task<UserLoginResponse> {
+        val rawId = response.keyHandle.toBase64()
+        val call = client.newCall(
+                Request.Builder()
+                        .url(LoginUrl)
+                        .method("POST", jsonRequestBody {
+                            name("id").value(rawId)
+                            name("type").value(PublicKeyCredentialType.PUBLIC_KEY.toString())
+                            name("rawId").value(rawId)
+                            name("response").objectValue {
+                                name("clientDataJSON").value(
+                                        response.clientDataJSON.toBase64()
+                                )
+                                name("authenticatorData").value(
+                                        response.authenticatorData.toBase64()
+                                )
+                                name("signature").value(
+                                        response.signature.toBase64()
+                                )
+                                name("userHandle").value(
+                                        response.userHandle?.toBase64() ?: ""
+                                )
+                            }
+                        })
+                        .build()
+        )
+        return Tasks.call(executor, {
+            val apiResponse = call.execute()
+            if (apiResponse.isSuccessful) {
+                parseUserLoginResult(apiResponse.body
+                        ?: throw ApiException("Empty response from updateLoginResponse"))
+            } else {
+                UserLoginResponse(null, null, "Error calling updateLoginResponse")
+            }
+        })
+    }
+
     private fun jsonRequestBody(body: JsonWriter.() -> Unit): RequestBody {
         val output = StringWriter()
         JsonWriter(output).use { writer ->
@@ -200,6 +291,28 @@ class FidoHttpClient {
         }
         reader.endObject()
         return value?.decodeBase64()!!.toByteArray()
+    }
+
+    private fun parseUserLoginResult(body: ResponseBody): UserLoginResponse {
+        var userId: Long? = null
+        var username: String? = null
+        JsonReader(body.byteStream().bufferedReader()).use { reader ->
+            reader.beginObject()
+            while (reader.hasNext()) {
+                when (reader.nextName()) {
+                    "userId" -> userId = reader.nextLong()
+                    "username" -> username = reader.nextString()
+                    else -> reader.skipValue()
+                }
+            }
+            reader.endObject()
+        }
+        return if (userId != null) {
+            UserLoginResponse(userId, username, null)
+
+        } else {
+            UserLoginResponse(null, null, "Invalid login response")
+        }
     }
 
     private fun parseRp(reader: JsonReader): PublicKeyCredentialRpEntity {
